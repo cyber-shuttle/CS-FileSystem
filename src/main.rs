@@ -9,6 +9,9 @@
 //   cat /tmp/myfs/hello.txt
 //   fusermount -u /tmp/myfs   (Ctrl-C also unmounts)
 
+mod atlas;
+use atlas::{load_atlas, AtlasEntry};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -39,51 +42,97 @@ struct DataSource {
     files: Vec<CSFile>,
 }
 
-fn lookup_inode_in_directory(dir: &CSDirectory, inode_no: u64) -> Option<FileAttr> {
+fn directory_attr(ino: u64) -> FileAttr {
+    FileAttr {
+        ino,
+        size: 0,
+        blocks: 0,
+        atime: UNIX_EPOCH,
+        mtime: UNIX_EPOCH,
+        ctime: UNIX_EPOCH,
+        crtime: UNIX_EPOCH,
+        kind: FileType::Directory,
+        perm: 0o755,
+        nlink: 2,
+        uid: unsafe { libc::getuid() },
+        gid: unsafe { libc::getgid() },
+        rdev: 0,
+        flags: 0,
+        blksize: 512,
+    }
+}
+
+fn regular_file_attr(ino: u64, size: u64) -> FileAttr {
+    FileAttr {
+        ino,
+        size,
+        blocks: 1,
+        atime: UNIX_EPOCH,
+        mtime: UNIX_EPOCH,
+        ctime: UNIX_EPOCH,
+        crtime: UNIX_EPOCH,
+        kind: FileType::RegularFile,
+        perm: 0o644,
+        nlink: 1,
+        uid: unsafe { libc::getuid() },
+        gid: unsafe { libc::getgid() },
+        rdev: 0,
+        flags: 0,
+        blksize: 512,
+    }
+}
+
+fn build_atlas_datasource(
+    entries: &[AtlasEntry],
+    inode_gen: &mut InodeGenerator,
+    file_contents: &mut HashMap<u64, String>,
+) -> DataSource {
+    let mut directories = Vec::new();
+
+    for entry in entries {
+        let file_inode = inode_gen.next();
+
+        file_contents.insert(file_inode, entry.metadata_json.clone());
+
+        let metadata_file = CSFile {
+            inode_no: file_inode,
+            cs_data_id: format!("{}_metadata", entry.id),
+            name: "metadata.json".to_string(),
+        };
+
+        let dir = CSDirectory {
+            inode_no: inode_gen.next(),
+            name: entry.id.clone(),
+            cs_data_id: entry.id.clone(),
+            files: vec![metadata_file],
+            directories: vec![],
+        };
+        directories.push(dir);
+    }
+
+    DataSource::new(inode_gen.next(), "atlas".to_string(), directories, vec![])
+}
+
+fn lookup_inode_in_directory(
+    dir: &CSDirectory,
+    inode_no: u64,
+    file_contents: &HashMap<u64, String>,
+) -> Option<FileAttr> {
     if inode_no == dir.inode_no {
-        return Some(FileAttr {
-            ino: dir.inode_no,
-            size: 0,
-            blocks: 0,
-            atime: UNIX_EPOCH,
-            mtime: UNIX_EPOCH,
-            ctime: UNIX_EPOCH,
-            crtime: UNIX_EPOCH,
-            kind: FileType::Directory,
-            perm: 0o755,
-            nlink: 2,
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-            rdev: 0,
-            flags: 0,
-            blksize: 512,
-        });
+        return Some(directory_attr(dir.inode_no));
     }
 
     for file in &dir.files {
         if inode_no == file.inode_no {
-            return Some(FileAttr {
-                ino: file.inode_no,
-                size: 0,
-                blocks: 0,
-                atime: UNIX_EPOCH,
-                mtime: UNIX_EPOCH,
-                ctime: UNIX_EPOCH,
-                crtime: UNIX_EPOCH,
-                kind: FileType::RegularFile,
-                perm: 0o644,
-                nlink: 1,
-                uid: unsafe { libc::getuid() },
-                gid: unsafe { libc::getgid() },
-                rdev: 0,
-                flags: 0,
-                blksize: 512,
-            });
+            let size = file_contents
+                .get(&file.inode_no)
+                .map_or(0, |content| content.len() as u64);
+            return Some(regular_file_attr(file.inode_no, size));
         }
     }
 
     for subdir in &dir.directories {
-        if let Some(attr) = lookup_inode_in_directory(subdir, inode_no) {
+        if let Some(attr) = lookup_inode_in_directory(subdir, inode_no, file_contents) {
             return Some(attr);
         }
     }
@@ -91,163 +140,128 @@ fn lookup_inode_in_directory(dir: &CSDirectory, inode_no: u64) -> Option<FileAtt
     None
 }
 
-fn lookup_attr_in_directory(dir: &CSDirectory, name: &OsStr, parent_inode: u64) -> Option<FileAttr> {
-    
+fn lookup_attr_in_directory(
+    dir: &CSDirectory,
+    name: &OsStr,
+    parent_inode: u64,
+    file_contents: &HashMap<u64, String>,
+) -> Option<FileAttr> {
     for file in &dir.files {
         if parent_inode == dir.inode_no && name.to_str() == Some(file.name.as_str()) {
-            return Some(FileAttr {
-                ino: file.inode_no,
-                size: 0,
-                blocks: 0,
-                atime: UNIX_EPOCH,
-                mtime: UNIX_EPOCH,
-                ctime: UNIX_EPOCH,
-                crtime: UNIX_EPOCH,
-                kind: FileType::RegularFile,
-                perm: 0o644,
-                nlink: 1,
-                uid: unsafe { libc::getuid() },
-                gid: unsafe { libc::getgid() },
-                rdev: 0,
-                flags: 0,
-                blksize: 512,
-            });
+            let size = file_contents
+                .get(&file.inode_no)
+                .map_or(0, |content| content.len() as u64);
+            return Some(regular_file_attr(file.inode_no, size));
         }
     }
 
     for subdir in &dir.directories {
         if parent_inode == dir.inode_no && name.to_str() == Some(subdir.name.as_str()) {
-            return Some(FileAttr {
-                ino: subdir.inode_no,
-                size: 0,
-                blocks: 0,
-                atime: UNIX_EPOCH,
-                mtime: UNIX_EPOCH,
-                ctime: UNIX_EPOCH,
-                crtime: UNIX_EPOCH,
-                kind: FileType::Directory,
-                perm: 0o755,
-                nlink: 2,
-                uid: unsafe { libc::getuid() },
-                gid: unsafe { libc::getgid() },
-                rdev: 0,
-                flags: 0,
-                blksize: 512,
-            });
+            return Some(directory_attr(subdir.inode_no));
         }
     }
 
     for subdir in &dir.directories {
-        if let Some(attr) = lookup_attr_in_directory(subdir, name, parent_inode) {
+        if let Some(attr) = lookup_attr_in_directory(subdir, name, parent_inode, file_contents) {
             return Some(attr);
         }
     }
 
+    None
+}
+
+fn find_directory_listing<'a>(
+    dir: &'a CSDirectory,
+    inode_no: u64,
+    parent_inode: u64,
+) -> Option<(u64, &'a [CSFile], &'a [CSDirectory])> {
+    if inode_no == dir.inode_no {
+        return Some((parent_inode, &dir.files, &dir.directories));
+    }
+
+    for subdir in &dir.directories {
+        if let Some(listing) = find_directory_listing(subdir, inode_no, dir.inode_no) {
+            return Some(listing);
+        }
+    }
 
     None
 }
 
-
 impl DataSource {
-
     fn new(inode_no: u64, name: String, directories: Vec<CSDirectory>, files: Vec<CSFile>) -> Self {
-        DataSource { inode_no, name, directories, files }
-    }
-
-    fn get_attr(&self, ) -> FileAttr {
-        FileAttr {
-            ino: self.inode_no,
-            size: 0,
-            blocks: 0,
-            atime: UNIX_EPOCH,
-            mtime: UNIX_EPOCH,
-            ctime: UNIX_EPOCH,
-            crtime: UNIX_EPOCH,
-            kind: FileType::Directory,
-            perm: 0o755,
-            nlink: 2,
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-            rdev: 0,
-            flags: 0,
-            blksize: 512,
+        DataSource {
+            inode_no,
+            name,
+            directories,
+            files,
         }
     }
 
-    fn lookup_by_inode(&self, inode_no: u64) -> Option<FileAttr> {
+    fn get_attr(&self) -> FileAttr {
+        directory_attr(self.inode_no)
+    }
+
+    fn lookup_by_inode(
+        &self,
+        inode_no: u64,
+        file_contents: &HashMap<u64, String>,
+    ) -> Option<FileAttr> {
         if inode_no == self.inode_no {
             return Some(self.get_attr());
         }
 
         for file in &self.files {
             if inode_no == file.inode_no {
-                return Some(FileAttr {
-                    ino: file.inode_no,
-                    size: 0,
-                    blocks: 0,
-                    atime: UNIX_EPOCH,
-                    mtime: UNIX_EPOCH,
-                    ctime: UNIX_EPOCH,
-                    crtime: UNIX_EPOCH,
-                    kind: FileType::RegularFile,
-                    perm: 0o644,
-                    nlink: 1,
-                    uid: unsafe { libc::getuid() },
-                    gid: unsafe { libc::getgid() },
-                    rdev: 0,
-                    flags: 0,
-                    blksize: 512,
-                });
+                let size = file_contents
+                    .get(&file.inode_no)
+                    .map_or(0, |content| content.len() as u64);
+                return Some(regular_file_attr(file.inode_no, size));
             }
         }
 
         for dir in &self.directories {
-            if let Some(attr) = lookup_inode_in_directory(dir, inode_no) {
+            if let Some(attr) = lookup_inode_in_directory(dir, inode_no, file_contents) {
                 return Some(attr);
             }
         }
         None
     }
 
-
-    fn lookup_by_name(&self, parent_inode: u64, name: &OsStr) -> Option<FileAttr> {
+    fn lookup_by_name(
+        &self,
+        parent_inode: u64,
+        name: &OsStr,
+        file_contents: &HashMap<u64, String>,
+    ) -> Option<FileAttr> {
         for file in &self.files {
             if parent_inode == self.inode_no && name.to_str() == Some(file.name.as_str()) {
-                return Some(FileAttr {
-                    ino: file.inode_no,
-                    size: 0,
-                    blocks: 0,
-                    atime: UNIX_EPOCH,
-                    mtime: UNIX_EPOCH,
-                    ctime: UNIX_EPOCH,
-                    crtime: UNIX_EPOCH,
-                    kind: FileType::RegularFile,
-                    perm: 0o644,
-                    nlink: 1,
-                    uid: unsafe { libc::getuid() },
-                    gid: unsafe { libc::getgid() },
-                    rdev: 0,
-                    flags: 0,
-                    blksize: 512,
-                });
+                let size = file_contents
+                    .get(&file.inode_no)
+                    .map_or(0, |content| content.len() as u64);
+                return Some(regular_file_attr(file.inode_no, size));
             }
         }
 
         for dir in &self.directories {
-            if let Some(attr) = lookup_attr_in_directory(dir, name, parent_inode) {
+            if parent_inode == self.inode_no && name.to_str() == Some(dir.name.as_str()) {
+                return Some(directory_attr(dir.inode_no));
+            }
+        }
+
+        for dir in &self.directories {
+            if let Some(attr) = lookup_attr_in_directory(dir, name, parent_inode, file_contents) {
                 return Some(attr);
             }
         }
         None
-    }   
-
+    }
 }
-
 
 // implement an incrementing inode number generator
 struct InodeGenerator {
     current: u64,
-}   
+}
 
 impl InodeGenerator {
     fn new() -> Self {
@@ -260,7 +274,6 @@ impl InodeGenerator {
         inode
     }
 }
-
 
 const TTL: Duration = Duration::from_secs(1);
 
@@ -309,19 +322,24 @@ fn hello_attr() -> FileAttr {
     }
 }
 struct CybershuttleFS {
-    data_sources: Vec<DataSource>, 
+    data_sources: Vec<DataSource>,
+    file_contents: HashMap<u64, String>, //inode -> content
 }
 
 impl Filesystem for CybershuttleFS {
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-
         for ds in &self.data_sources {
             if parent == ROOT_INO && name.to_str() == Some(ds.name.as_str()) {
                 reply.entry(&TTL, &ds.get_attr(), 0);
                 return;
             }
-            if let Some(attr) = ds.lookup_by_name(parent, name) {
-                reply.entry(&TTL, &attr, 0);
+            if let Some(attr) = ds.lookup_by_name(parent, name, &self.file_contents) {
+                if let Some(content) = self.file_contents.get(&attr.ino) {
+                    let file_attr = regular_file_attr(attr.ino, content.len() as u64);
+                    reply.entry(&TTL, &file_attr, 0);
+                } else {
+                    reply.entry(&TTL, &attr, 0);
+                }
                 return;
             }
         }
@@ -334,12 +352,17 @@ impl Filesystem for CybershuttleFS {
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
+        if let Some(content) = self.file_contents.get(&ino) {
+            reply.attr(&TTL, &regular_file_attr(ino, content.len() as u64));
+            return;
+        }
+
         match ino {
             ROOT_INO => reply.attr(&TTL, &root_attr()),
             HELLO_INO => reply.attr(&TTL, &hello_attr()),
             _ => {
                 for ds in &self.data_sources {
-                    if let Some(attr) = ds.lookup_by_inode(ino) {
+                    if let Some(attr) = ds.lookup_by_inode(ino, &self.file_contents) {
                         reply.attr(&TTL, &attr);
                         return;
                     }
@@ -360,14 +383,19 @@ impl Filesystem for CybershuttleFS {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        if ino != HELLO_INO {
+        if let Some(content) = self.file_contents.get(&ino) {
+            let data = content.as_bytes();
+            let start = (offset as usize).min(data.len());
+            let end = (start + size as usize).min(data.len());
+            reply.data(&data[start..end]);
+        } else if ino == HELLO_INO {
+            let data = HELLO_CONTENT.as_bytes();
+            let start = (offset as usize).min(data.len());
+            let end = (start + size as usize).min(data.len());
+            reply.data(&data[start..end]);
+        } else {
             reply.error(ENOENT);
-            return;
         }
-        let data = HELLO_CONTENT.as_bytes();
-        let start = (offset as usize).min(data.len());
-        let end = (start + size as usize).min(data.len());
-        reply.data(&data[start..end]);
     }
 
     fn readdir(
@@ -378,14 +406,13 @@ impl Filesystem for CybershuttleFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-
         if ino == ROOT_INO {
             // Add the "hello.txt" entry to the root directory
             let mut entries = vec![
                 (ROOT_INO, FileType::Directory, "."),
                 (ROOT_INO, FileType::Directory, ".."),
             ];
-            
+
             for ds in self.data_sources.iter() {
                 entries.push((ds.inode_no, FileType::Directory, ds.name.as_str()));
             }
@@ -399,32 +426,37 @@ impl Filesystem for CybershuttleFS {
             reply.ok();
             return;
         } else {
-
             for ds in &self.data_sources {
-                if let Some(attr) = ds.lookup_by_inode(ino) {
-                    if attr.kind == FileType::Directory {
-                        let mut entries = vec![
-                            (attr.ino, FileType::Directory, "."),
-                            (ROOT_INO, FileType::Directory, ".."),
-                        ];
+                let listing = if ino == ds.inode_no {
+                    Some((ROOT_INO, ds.files.as_slice(), ds.directories.as_slice()))
+                } else {
+                    ds.directories
+                        .iter()
+                        .find_map(|dir| find_directory_listing(dir, ino, ds.inode_no))
+                };
 
-                        for file in &ds.files {
-                            entries.push((file.inode_no, FileType::RegularFile, file.name.as_str()));
-                        }
+                if let Some((parent_inode, files, directories)) = listing {
+                    let mut entries = vec![
+                        (ino, FileType::Directory, "."),
+                        (parent_inode, FileType::Directory, ".."),
+                    ];
 
-                        for dir in &ds.directories {
-                            entries.push((dir.inode_no, FileType::Directory, dir.name.as_str()));
-                        }
-
-                        for (i, entry) in entries.iter().enumerate().skip(offset as usize) {
-                            // i + 1 is the next offset to resume from.
-                            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
-                                break;
-                            }
-                        }
-                        reply.ok();
-                        return;
+                    for file in files {
+                        entries.push((file.inode_no, FileType::RegularFile, file.name.as_str()));
                     }
+
+                    for dir in directories {
+                        entries.push((dir.inode_no, FileType::Directory, dir.name.as_str()));
+                    }
+
+                    for (i, entry) in entries.iter().enumerate().skip(offset as usize) {
+                        // i + 1 is the next offset to resume from.
+                        if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+                            break;
+                        }
+                    }
+                    reply.ok();
+                    return;
                 }
             }
         }
@@ -435,68 +467,35 @@ impl Filesystem for CybershuttleFS {
 fn main() {
     env_logger::init();
 
-    let mountpoint = std::env::args_os().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: cs-filesystem <MOUNTPOINT>");
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: cs-filesystem <tsv_path> <mountpoint>");
         std::process::exit(1);
-    });
+    }
+
+    let tsv_path = &args[1];
+    let mountpoint = &args[2];
+
+    let entries = load_atlas(tsv_path);
+    println!("Loaded {} ATLAS entries", entries.len());
+
+    let mut inode_gen = InodeGenerator::new();
+    let mut file_contents = HashMap::new();
+    let atlas_ds = build_atlas_datasource(&entries, &mut inode_gen, &mut file_contents);
+
+    let data_sources = vec![atlas_ds];
+    let fs = CybershuttleFS {
+        data_sources,
+        file_contents,
+    };
 
     let options = vec![
         MountOption::RO,
         MountOption::FSName("cybershuttlefs".to_string()),
         MountOption::AutoUnmount,
-        MountOption::AllowOther,
     ];
 
-
-    let mut inode_gen = InodeGenerator::new();
-
-    let alp_dirs = vec![
-        CSDirectory {
-            inode_no: inode_gen.next(),
-            name: "pdb".to_string(),
-            cs_data_id: "alphafold_pdb".to_string(),
-            files: vec![],
-            directories: vec![],
-        },
-        CSDirectory {
-            inode_no: inode_gen.next(),
-            name: "fasta".to_string(),
-            cs_data_id: "alphafold_fasta".to_string(),
-            files: vec![],
-            directories: vec![],
-        },
-    ];
-
-
-    let alp_files = vec![
-        CSFile {
-            inode_no: inode_gen.next(),
-            cs_data_id: "alphafold_summary".to_string(),
-            name: "summary.txt".to_string(),
-        },
-    ];
-
-
-    let protein_data_dirs = vec![
-        CSDirectory {
-            inode_no: inode_gen.next(),
-            name: "uniprot".to_string(),
-            cs_data_id: "protein_data_uniprot".to_string(),
-            files: vec![],
-            directories: vec![],
-        },
-    ];
-
-
-    let data_sources = vec![
-        DataSource::new(inode_gen.next(), "alphafold".to_string(), alp_dirs, alp_files),
-        DataSource::new(inode_gen.next(), "protein_data".to_string(), protein_data_dirs, vec![]),
-    ];
-
-
-    let fs = CybershuttleFS { data_sources };
-
-    if let Err(e) = fuser::mount2(fs, &mountpoint, &options) {
+    if let Err(e) = fuser::mount2(fs, mountpoint, &options) {
         eprintln!("Failed to mount filesystem: {e}");
         std::process::exit(1);
     }
