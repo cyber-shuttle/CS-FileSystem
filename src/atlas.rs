@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 
 use fuser::{FileAttr, FileType, ReplyDirectory};
+use std::path::Path;
 
 use crate::{directory_attr, regular_file_attr, InodeGenerator, VirtualDataSource};
 
@@ -62,7 +63,36 @@ impl AtlasDataSource {
     pub fn entry_count(&self) -> usize {
         self.entry_dirs.len()
     }
+    pub fn entry_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .entry_dirs
+            .values()
+            .map(|node| node.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+    pub fn metadata_json(&self, id: &str) -> Option<&str> {
+        let entry_inode = self.entry_name_to_inode.get(id)?;
+        let node = self.entry_dirs.get(entry_inode)?;
+        self.file_contents
+            .get(&node.metadata_inode)
+            .map(String::as_str)
+    }
+    pub fn materialize(&self, output_dir: &str) -> std::io::Result<()> {
+        let atlas_dir = Path::new(output_dir).join("atlas");
+        fs::create_dir_all(&atlas_dir)?;
 
+        for id in self.entry_ids() {
+            let entry_dir = atlas_dir.join(&id);
+            fs::create_dir_all(&entry_dir)?;
+
+            if let Some(metadata_json) = self.metadata_json(&id) {
+                fs::write(entry_dir.join(METADATA_FILE_NAME), metadata_json)?;
+            }
+        }
+        Ok(())
+    }
     fn metadata_attr(&self, metadata_inode: u64) -> Option<FileAttr> {
         self.file_contents
             .get(&metadata_inode)

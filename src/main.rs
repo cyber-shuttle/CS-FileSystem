@@ -1,7 +1,7 @@
-// Simple read-only FUSE filesystem using the `fuser` crate.
+// Read-only CS filesystem for exposing Cybershuttle data sources.
 //
-// Top-level directories are implemented by pluggable data sources. The first
-// data source is ATLAS, which serves one metadata.json file per protein entry.
+// The FUSE mode mounts pluggable data sources as a virtual filesystem. The
+// materialize mode writes the same logical tree to disk for NFS export.
 
 mod atlas;
 
@@ -207,17 +207,34 @@ fn main() {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: cs-filesystem <tsv_path> <mountpoint>");
+    if args.len() < 4 {
+        eprintln!("Usage: cs-filesystem <fuse|materialize> <tsv_path> <output_path>");
         std::process::exit(1);
     }
 
-    let tsv_path = &args[1];
-    let mountpoint = &args[2];
+    let mode = &args[1];
+    let tsv_path = &args[2];
+    let output_path = &args[3];
 
     let mut inode_gen = InodeGenerator::new();
     let atlas_ds = atlas::load_atlas_datasource(tsv_path, &mut inode_gen);
     println!("Loaded {} ATLAS entries", atlas_ds.entry_count());
+
+    if mode == "materialize" {
+        if let Err(e) = atlas_ds.materialize(output_path) {
+            eprintln!("Failed to materialize ATLAS filesystem: {e}");
+            std::process::exit(1);
+        }
+
+        println!("Materialized ATLAS filesystem at {output_path}");
+        return;
+    }
+
+    if mode != "fuse" {
+        eprintln!("Unknown mode: {mode}");
+        eprintln!("Usage: cs-filesystem <fuse|materialize> <tsv_path> <output_path>");
+        std::process::exit(1);
+    }
 
     let fs = CybershuttleFS {
         data_sources: vec![Box::new(atlas_ds)],
@@ -229,7 +246,7 @@ fn main() {
         MountOption::AutoUnmount,
     ];
 
-    if let Err(e) = fuser::mount2(fs, mountpoint, &options) {
+    if let Err(e) = fuser::mount2(fs, output_path, &options) {
         eprintln!("Failed to mount filesystem: {e}");
         std::process::exit(1);
     }

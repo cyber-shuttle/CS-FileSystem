@@ -14,6 +14,8 @@ as a directory containing a `metadata.json` file.
       metadata.json
 ```
 
+FUSE mounting is supported directly. For NFS, the same ATLAS tree can be materialized to a real directory and exported with the system NFS server.
+
 ## Requirements
 
 ### Linux
@@ -48,13 +50,13 @@ mkdir -p data
 cp /path/to/2024_11_18_ATLAS_info.tsv data/
 ```
 
-## Run
+## Run with FUSE
 
 Build and mount the filesystem:
 
 ```bash
 mkdir -p /tmp/atlas_mount
-cargo run --release -- data/2024_11_18_ATLAS_info.tsv /tmp/atlas_mount
+cargo run --release -- fuse data/2024_11_18_ATLAS_info.tsv /tmp/atlas_mount
 ```
 
 Leave that command running while the filesystem is mounted.
@@ -81,3 +83,16 @@ macOS:
 ```bash
 diskutil unmount /tmp/atlas_mount
 ```
+
+## Materialize For NFS
+
+Write the same ATLAS filesystem tree to a real directory:
+
+```bash
+rm -rf /tmp/atlas_export
+cargo run --release -- materialize data/2024_11_18_ATLAS_info.tsv /tmp/atlas_export
+ls /tmp/atlas_export/atlas | head
+cat /tmp/atlas_export/atlas/1r6w_A/metadata.json
+```
+
+The `/tmp/atlas_export` directory can then be exported with the system NFS server.
