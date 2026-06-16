@@ -4,6 +4,7 @@
 // materialize mode writes the same logical tree to disk for NFS export.
 
 mod atlas;
+mod nfs_server;
 
 use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
@@ -203,12 +204,13 @@ impl Filesystem for CybershuttleFS {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!("Usage: cs-filesystem <fuse|materialize> <tsv_path> <output_path>");
+        eprintln!("Usage: cs-filesystem <fuse|materialize|nfs> <tsv_path> <output_path|bind_addr>");
         std::process::exit(1);
     }
 
@@ -219,6 +221,14 @@ fn main() {
     let mut inode_gen = InodeGenerator::new();
     let atlas_ds = atlas::load_atlas_datasource(tsv_path, &mut inode_gen);
     println!("Loaded {} ATLAS entries", atlas_ds.entry_count());
+
+    if mode == "nfs" {
+        if let Err(e) = nfs_server::serve(atlas_ds, output_path).await {
+            eprintln!("Failed to serve NFS filesystem: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     if mode == "materialize" {
         if let Err(e) = atlas_ds.materialize(output_path) {
@@ -232,7 +242,7 @@ fn main() {
 
     if mode != "fuse" {
         eprintln!("Unknown mode: {mode}");
-        eprintln!("Usage: cs-filesystem <fuse|materialize> <tsv_path> <output_path>");
+        eprintln!("Usage: cs-filesystem <fuse|materialize|nfs> <tsv_path> <output_path|bind_addr>");
         std::process::exit(1);
     }
 
