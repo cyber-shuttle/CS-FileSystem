@@ -7,11 +7,21 @@ use nfsserve::{
     vfs::{DirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities},
 };
 
-use crate::atlas::AtlasDataSource;
-
 const ROOT_ID: fileid3 = 1;
-const ATLAS_ID: fileid3 = 2;
+const INDEX_ID: fileid3 = 2;
+const INDEX_FILE_NAME: &str = "index.json";
 const METADATA_FILE_NAME: &str = "metadata.json";
+
+pub struct NfsDataset {
+    pub name: String,
+    pub kind: String,
+    pub entries: Vec<NfsEntry>,
+}
+
+pub struct NfsEntry {
+    pub id: String,
+    pub metadata_json: String,
+}
 
 enum NfsNode {
     Directory {
@@ -25,70 +35,95 @@ enum NfsNode {
     },
 }
 
-pub struct AtlasNfs {
+pub struct CybershuttleNfs {
     nodes: HashMap<fileid3, NfsNode>,
 }
 
-impl AtlasNfs {
-    pub fn new(atlas: AtlasDataSource) -> Self {
+impl CybershuttleNfs {
+    pub fn new(datasets: Vec<NfsDataset>) -> Self {
         let mut nodes = HashMap::new();
+        let index_json = nfs_index_json(&datasets);
+        let mut root_children = vec![INDEX_ID];
+        let mut next_id: fileid3 = 3;
+
+        for dataset in datasets {
+            let dataset_dir_id = next_id;
+            next_id += 1;
+            root_children.push(dataset_dir_id);
+
+            let mut dataset_children = Vec::new();
+
+            for entry in dataset.entries {
+                let entry_dir_id = next_id;
+                next_id += 1;
+
+                let metadata_file_id = next_id;
+                next_id += 1;
+
+                dataset_children.push(entry_dir_id);
+
+                nodes.insert(
+                    entry_dir_id,
+                    NfsNode::Directory {
+                        name: entry.id.as_bytes().to_vec(),
+                        parent: dataset_dir_id,
+                        children: vec![metadata_file_id],
+                    },
+                );
+
+                nodes.insert(
+                    metadata_file_id,
+                    NfsNode::File {
+                        name: METADATA_FILE_NAME.as_bytes().to_vec(),
+                        contents: entry.metadata_json.as_bytes().to_vec(),
+                    },
+                );
+            }
+
+            nodes.insert(
+                dataset_dir_id,
+                NfsNode::Directory {
+                    name: dataset.name.as_bytes().to_vec(),
+                    parent: ROOT_ID,
+                    children: dataset_children,
+                },
+            );
+        }
+
+        nodes.insert(
+            INDEX_ID,
+            NfsNode::File {
+                name: INDEX_FILE_NAME.as_bytes().to_vec(),
+                contents: index_json.into_bytes(),
+            },
+        );
 
         nodes.insert(
             ROOT_ID,
             NfsNode::Directory {
                 name: b"/".to_vec(),
                 parent: ROOT_ID,
-                children: vec![ATLAS_ID],
+                children: root_children,
             },
         );
 
-        let mut atlas_children = Vec::new();
-        let mut next_id: fileid3 = 3;
-
-        for entry_id in atlas.entry_ids() {
-            let entry_dir_id = next_id;
-            next_id += 1;
-
-            let metadata_file_id = next_id;
-            next_id += 1;
-
-            atlas_children.push(entry_dir_id);
-
-            nodes.insert(
-                entry_dir_id,
-                NfsNode::Directory {
-                    name: entry_id.as_bytes().to_vec(),
-                    parent: ATLAS_ID,
-                    children: vec![metadata_file_id],
-                },
-            );
-
-            let metadata = atlas
-                .metadata_json(&entry_id)
-                .unwrap_or("")
-                .as_bytes()
-                .to_vec();
-
-            nodes.insert(
-                metadata_file_id,
-                NfsNode::File {
-                    name: METADATA_FILE_NAME.as_bytes().to_vec(),
-                    contents: metadata,
-                },
-            );
-        }
-
-        nodes.insert(
-            ATLAS_ID,
-            NfsNode::Directory {
-                name: b"atlas".to_vec(),
-                parent: ROOT_ID,
-                children: atlas_children,
-            },
-        );
-
-        AtlasNfs { nodes }
+        CybershuttleNfs { nodes }
     }
+}
+
+fn nfs_index_json(datasets: &[NfsDataset]) -> String {
+    let dataset_values: Vec<serde_json::Value> = datasets
+        .iter()
+        .map(|dataset| {
+            serde_json::json!({
+                "name": dataset.name.as_str(),
+                "kind": dataset.kind.as_str(),
+                "entries": dataset.entries.len(),
+            })
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&serde_json::json!({ "datasets": dataset_values })).unwrap()
 }
 
 fn attr_for(id: fileid3, node: &NfsNode) -> fattr3 {
@@ -115,7 +150,7 @@ fn attr_for(id: fileid3, node: &NfsNode) -> fattr3 {
 }
 
 #[async_trait]
-impl NFSFileSystem for AtlasNfs {
+impl NFSFileSystem for CybershuttleNfs {
     fn root_dir(&self) -> fileid3 {
         ROOT_ID
     }
@@ -282,11 +317,11 @@ impl NFSFileSystem for AtlasNfs {
     }
 }
 
-pub async fn serve(atlas: AtlasDataSource, bind_addr: &str) -> std::io::Result<()> {
-    let fs = AtlasNfs::new(atlas);
+pub async fn serve(datasets: Vec<NfsDataset>, bind_addr: &str) -> std::io::Result<()> {
+    let fs = CybershuttleNfs::new(datasets);
 
     let listener = NFSTcpListener::bind(bind_addr, fs).await?;
-    println!("Serving ATLAS NFS on {bind_addr}");
+    println!("Serving Cybershuttle NFS on {bind_addr}");
 
     listener.handle_forever().await
 }
