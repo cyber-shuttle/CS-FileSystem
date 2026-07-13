@@ -9,7 +9,9 @@ use nfsserve::{
 
 const ROOT_ID: fileid3 = 1;
 const INDEX_ID: fileid3 = 2;
+const REGISTRY_ID: fileid3 = 3;
 const INDEX_FILE_NAME: &str = "index.json";
+const REGISTRY_FILE_NAME: &str = "registry.json";
 const METADATA_FILE_NAME: &str = "metadata.json";
 
 pub struct NfsDataset {
@@ -40,11 +42,11 @@ pub struct CybershuttleNfs {
 }
 
 impl CybershuttleNfs {
-    pub fn new(datasets: Vec<NfsDataset>) -> Self {
+    pub fn new(datasets: Vec<NfsDataset>, registry_json: String) -> Self {
         let mut nodes = HashMap::new();
         let index_json = nfs_index_json(&datasets);
-        let mut root_children = vec![INDEX_ID];
-        let mut next_id: fileid3 = 3;
+        let mut root_children = vec![INDEX_ID, REGISTRY_ID];
+        let mut next_id: fileid3 = 4;
 
         for dataset in datasets {
             let dataset_dir_id = next_id;
@@ -95,6 +97,14 @@ impl CybershuttleNfs {
             NfsNode::File {
                 name: INDEX_FILE_NAME.as_bytes().to_vec(),
                 contents: index_json.into_bytes(),
+            },
+        );
+
+        nodes.insert(
+            REGISTRY_ID,
+            NfsNode::File {
+                name: REGISTRY_FILE_NAME.as_bytes().to_vec(),
+                contents: registry_json.into_bytes(),
             },
         );
 
@@ -317,8 +327,12 @@ impl NFSFileSystem for CybershuttleNfs {
     }
 }
 
-pub async fn serve(datasets: Vec<NfsDataset>, bind_addr: &str) -> std::io::Result<()> {
-    let fs = CybershuttleNfs::new(datasets);
+pub async fn serve(
+    datasets: Vec<NfsDataset>,
+    registry_json: String,
+    bind_addr: &str,
+) -> std::io::Result<()> {
+    let fs = CybershuttleNfs::new(datasets, registry_json);
 
     let listener = NFSTcpListener::bind(bind_addr, fs).await?;
     println!("Serving Cybershuttle NFS on {bind_addr}");

@@ -284,12 +284,12 @@ mod tests {
     fn allocates_predictable_inodes_for_atlas_tree() {
         let ds = sample_datasource();
 
-        assert_eq!(ds.inode(), 4);
+        assert_eq!(ds.inode(), 5);
         assert_eq!(ds.entry_count(), 2);
-        assert_eq!(ds.entry_name_to_inode["1r6w_A"], 5);
-        assert_eq!(ds.entry_dirs[&5].metadata_inode, 6);
-        assert_eq!(ds.entry_name_to_inode["2y44_A"], 7);
-        assert_eq!(ds.entry_dirs[&7].metadata_inode, 8);
+        assert_eq!(ds.entry_name_to_inode["1r6w_A"], 6);
+        assert_eq!(ds.entry_dirs[&6].metadata_inode, 7);
+        assert_eq!(ds.entry_name_to_inode["2y44_A"], 8);
+        assert_eq!(ds.entry_dirs[&8].metadata_inode, 9);
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
         let ds = sample_datasource();
         let attr = ds.lookup(ds.inode(), OsStr::new("1r6w_A")).unwrap();
 
-        assert_eq!(attr.ino, 5);
+        assert_eq!(attr.ino, 6);
         assert_eq!(attr.kind, FileType::Directory);
         assert_eq!(attr.perm, 0o755);
     }
@@ -385,8 +385,8 @@ mod tests {
             entries[1],
             (ds.inode(), FileType::Directory, "..".to_string())
         );
-        assert_eq!(entries[2], (5, FileType::Directory, "1r6w_A".to_string()));
-        assert_eq!(entries[3], (7, FileType::Directory, "2y44_A".to_string()));
+        assert_eq!(entries[2], (6, FileType::Directory, "1r6w_A".to_string()));
+        assert_eq!(entries[3], (8, FileType::Directory, "2y44_A".to_string()));
     }
 
     #[test]
