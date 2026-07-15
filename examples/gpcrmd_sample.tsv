@@ -1,0 +1,3 @@
+simulation_id	receptor	ligand	state
+adrb2_active	ADRB2	epinephrine	active
+adora2a_inactive	ADORA2A	caffeine	inactive
