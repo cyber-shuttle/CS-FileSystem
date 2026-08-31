@@ -2,6 +2,10 @@
 
 This is a user-space filesystem for exposing Cybershuttle data sources.
 
+## Google Summer of Code 2026 Final Report
+
+See [GSoC-2026-Final-Report.md](./GSoC-2026-Final-Report.md).
+
 This version loads ATLAS metadata from a TSV file and can also load mdCATH,
 MemProtMD, and GPCRmd metadata from TSV or simple CSV files. Each dataset entry
 is exposed as a directory containing a `metadata.json` file.
@@ -38,6 +42,15 @@ also be materialized to a real directory when a static export is useful.
 `registry.json` describes the broader official dataset registry and how each
 dataset should be connected. The same official list is also exposed as the
 `datasets/` directory, where each dataset has a `metadata.json` file.
+
+## Documentation
+
+- [User Guide](docs/user-guide.md): install, configure, mount, browse, and
+  troubleshoot the filesystem.
+- [Developer Guide](docs/developer-guide.md): repo structure, architecture,
+  registry model, connector interface, and local development.
+- [Distribution](docs/distribution.md): local packaging and GitHub Release
+  workflow for macOS and Linux binaries.
 
 ## Official Dataset Registry
 
